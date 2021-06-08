@@ -31,6 +31,7 @@ import time
 #image into the folder locations below. 18 training, 8 testing.
 
 my_dir = "/root/mlhome/segmentation"
+git_dir = "/root/mlhome/segmentation/segmentation_cheng/"
 train_path = "./cropped_train_frames/"
 mask_path = "./cropped_train_masks/"
 test_img_path = "./cropped_test_frames/"
@@ -125,24 +126,27 @@ Y = y_train.reshape(-1)
 #Here we want to drop pixels with a value of 0 as it is unlabeled and
 #not worth wasting resources on to detect.
 
-df = pd.DataFrame(X)
-df['Label'] = Y
+def make_df(x, y):
+    df = pd.DataFrame(x)
+    df['Label'] = y
 
-#Look to verify labels are correct (i.e. not all blank)
-#print(df['Label'].unique()) #get different label values (pixel values)
-#print(df['Label'].value_counts()) #get sum of each pixel value
+    #Look to verify labels are correct (i.e. not all blank)
+    #print(df['Label'].unique()) #get different label values (pixel values)
+    #print(df['Label'].value_counts()) #get sum of each pixel value
 
-#Drop pixels with value of 0 -- no need to detect the background in this case
-df2 = df[df['Label'] != 0]
+    #Drop pixels with value of 0 -- no need to detect the background in this case
+    df = df[df['Label'] != 0]
 
-#set X & y training from df for ML models
-X_train = df2.drop(labels=['Label'], axis=1)
-X_train = np.asarray(X_train) #convert to array
-#X_train = X_train.values 
-Y_train = df2['Label']
-Y_train = np.asarray(Y_train) #convert to array
-#Y_train = Y_train.values #convert to arrary
+    #set X & y training from df for ML models
+    X = df.drop(labels=['Label'], axis=1)
+    X = np.asarray(X) #convert to array
 
+    Y = df['Label']
+    Y = np.asarray(Y) #convert to array
+    Y = Y.astype(int)
+    return(X, Y)
+
+X_train, Y_train = make_df(X, Y)
 
 ###### testing features ######
 #get test files brought in to match dimensions
@@ -150,31 +154,10 @@ test_images = get_files(my_dir, test_img_path, 1)
 test_masks = get_files(my_dir, test_mask_path, 0)
 
 #send test images through VGG16 model to get weights (one at a time)
-test_img_pred = get_features(test_images)
+x_test = get_features(test_images)
+y_test = test_masks.reshape(-1)
 
-i = 0
-
-while i < len(test_images):
-    img = np.expand_dims(test_images[i], axis=0)
-    get_features = new_model.predict(img)
-    get_features = np.squeeze(get_features)
-    test_img_pred.append(get_features)
-    
-    i += 1
-
-test_img_pred = np.array(test_img_pred)
-#now make match our size for train features
-test_features = test_img_pred.reshape(-1, test_img_pred.shape[3])
-
-#load test mask
-test_masks = []
-for m in sorted(glob.glob(os.path.join(test_mask_path, "*.tif"))):
-    test_mask_in = cv2.imread(m, 0)
-    test_masks.append(test_mask_in)
-    
-test_masks = np.array(test_masks)
-#shape to match size of test images
-test_masks = test_masks.reshape(-1)
+x_test, y_test = make_df(x_test, y_test)
 
 ##############################################################
 #################     Pre-Processing     #####################
@@ -187,7 +170,7 @@ test_masks = test_masks.reshape(-1)
 from sklearn import preprocessing
 
 X_train_norm = preprocessing.normalize(X_train) #x train values
-test_norm = preprocessing.normalize(test_features) #x test values
+x_test_norm = preprocessing.normalize(x_test) #x test values
 
 ### PCA ###
 #PCA for reduction of the size of data (reduce 64 features to 25)
@@ -196,117 +179,18 @@ pca = PCA(.99) #setup PCA so that it will retain 99% of the variance
 pca.fit(X_train_norm) #get PCAs of the training images/features
 pca.n_components_ #this shows that we only need 25 components to achieve 99%
 
-#save off pca for later use
-with open('pca.pkl', 'wb') as pickle_file:
-    pickle.dump(pca, pickle_file)
-
 #apply pca to transform training and testing images
 X_train_pca = pca.transform(X_train_norm)
-test_pca = pca.transform(test_norm)
+x_test_pca = pca.transform(x_test_norm)
 
-##############################################################
-#################     Random Forest     ######################
-##############################################################
-'''
-#This has already been completed. Models were saved as RF_base.sav & 
-#tuned model is RF_tuned.sav.
-
-import random
-from sklearn.ensemble import RandomForestClassifier as RF
-from sklearn.model_selection import RandomizedSearchCV
-
-#Base RF model to get it working for comparison
-rf_base = RF(n_estimators=50,
-                    random_state = 42,
-                    n_jobs=-1)
-
-### Train Base RF Model ###
-t1 = time.time()
-random.seed(30)
-rf_base.fit(X_train_pca, Y_train)
-t2 = time.time()
-print("Time in Seconds to Train: " + str(round(t2-t1))) #43 seconds on 20 cores
-
-#save base RF model for later use
-RF_base_name = 'RF_base.sav'
-pickle.dump(rf_base, open(RF_base_name, 'wb'))
-
-#################### RANDOM GRID SEARCH TUNING ##################
-#Find opitmal tuning parameters for RF
-###    NOTE: This will take several hours  ###
-
-#Now use random search to try various combinations
-rf = RF() #set base model of RF
-
-#setup random grid parameter ranges
-random_grid = {'n_estimators': range(20, 500, 20),
-               'max_features': ['auto'],
-               'max_depth': range(10,100, 10),
-               'min_samples_split': range(2,50,10),
-               'min_samples_leaf': range(1,10,10),
-               'bootstrap': [True]}
-
-# Random search of parameters, using 3 fold cross validation, 
-# search across 200 different combinations, and use all available cores
-rf_random = RandomizedSearchCV(estimator = rf,
-                               param_distributions = random_grid,
-                               n_iter = 200, #try 200 dif. random combos
-                               cv = 3,
-                               verbose=2,
-                               random_state=42,
-                               n_jobs = -2) #all but 1 processor
-
-##### TUNE WITH GRID SEARCH ###
-#tune with random grid
-t1 = time.time()
-
-random.seed(30)
-rf_tuned = rf_random.fit(X_train_pca, Y_train)
-t2 = time.time()
-
-print("Time in Seconds to Tune: " + str(round(t2-t1)))
-#53,258 (14.79 hours) on a system using 39 cores
-
-#print best parameters
-print(rf_random.best_params_)
-#'n_estimators': [440]
-#'max_features': ['auto'],
-#'max_depth': [60]
-#'min_samples_split':[2]
-#'min_samples_leaf': [1]
-#'bootstrap': [True]}
-
-#save base RF model for later use
-RF_tune_name = 'RF_tuned.sav'
-pickle.dump(rf_tuned, open(RF_tune_name, 'wb'))
+#save off pca for later use
+with open(git_dir+'pca.pkl', 'wb') as pickle_file:
+    pickle.dump(pca, pickle_file)
 
 
-### Manually set model -- Looking to see why it is so big when saved
-#print best parameters
-print(RF_tuned_model.best_params_)
-rf_params = RF_tuned_model.best_params_
-
-#create XRFmodel with params
-rf2_model = RF(**rf_params)
-
-t1 = time.time()
-
-random.seed(30)
-rf2_model_fit = rf2_model.fit(X_train_pca, Y_train)
-
-t2=time.time()
-print("Time in Minutes to Tune: " + str(round((t2-t1)/60)))
-# Time to tune on 40 core system: 104 min
-
-#save model
-RF_tune2_name = 'RF_tune2.sav'
-pickle.dump(rf2_model_fit, open(RF_tune2_name, 'wb'))
-
-'''
 ############################################################
 #################     XG Boosting     ######################
 ############################################################
-import random
 from xgboost import XGBClassifier as XGB
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 
