@@ -30,35 +30,26 @@ import time
 #set path to images; I had 26 images so I split them 70/30 and put the 
 #image into the folder locations below. 18 training, 8 testing.
 
+my_dir = "/root/mlhome/segmentation"
 train_path = "./cropped_train_frames/"
 mask_path = "./cropped_train_masks/"
 test_img_path = "./cropped_test_frames/"
 test_mask_path = "./cropped_test_masks/"
 
-train_images = []
 
-#Pull all images from the training images folder
-os.chdir("/root/mlhome/segmentation/")
-for i in sorted(glob.glob(os.path.join(train_path, "*.tif"))):
-    img = cv2.imread(i, 1)
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-       
-    train_images.append(img)
+def get_files(c_dir, path, cv2_flag): #flag 1 = color, 0 = grayscale
+    os.chdir(c_dir)
+    files = []
+    for i in sorted(glob.glob(os.path.join(path, "*.tif"))):
+        img = cv2.imread(i, cv2_flag)
+        if cv2_flag == 1:
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        files.append(img)
+    files = np.array(files)
+    return(files)
 
-#Convert list to array for machine learning processing        
-train_images = np.array(train_images)
-
-#Pull masks from mask folder. 
-train_masks = []
-
-#get training masks & save off both training and resized for VGG block 2
-os.chdir("/root/mlhome/segmentation/")
-for m in sorted(glob.glob(os.path.join(mask_path, "*.tif"))):
-    mask = cv2.imread(m, 0)
-    train_masks.append(mask)
-
-#Convert list to array for machine learning processing        
-train_masks = np.array(train_masks)
+train_images = get_files(my_dir, train_path, 1)
+train_masks = get_files(my_dir, mask_path, 0)
 
 #set x & y up for standard ML 
 X_train = train_images
@@ -66,7 +57,7 @@ y_train = train_masks
 
 ##########################################################
 #################     VGG16 Work    ######################
-##########################################################
+##############################################array############
 
 #Pull the VGG16 model and extract the weights from VGG16 training on imagenet
 #include_top=False removes the dense layers for prediction
@@ -97,7 +88,7 @@ new_model = Model(
 #new_model.summary()
 
 #save model for later use
-new_model.save('new_model.h5')
+new_model.save('./segmentation_cheng/new_model.h5')
 
 ##################################################
 ##########     Generate Features   ###############
@@ -109,36 +100,35 @@ new_model.save('new_model.h5')
 #because of the large image size, the system will throw OOM (out of memory)
 #errors if trying to run all images through the new_model at once. To work
 #around this, I created loop to pull an image one at a time and then append
-features = []
-i = 0
-
-while i < len(X_train):
-    img = np.expand_dims(X_train[i], axis=0)
-    get_features = new_model.predict(img) #this is where we get VGG16 weghts
-    get_features = np.squeeze(get_features)
-    features.append(get_features)
+def get_features(input_array):
+    features_out = []
+    i=0
+    while i < len(input_array):
+        img = np.expand_dims(input_array[i], axis=0)
+        get_features = new_model.predict(img) #this is where we get VGG16 weghts
+        get_features = np.squeeze(get_features) #remove the leading 1 for images
+        features_out.append(get_features)
     
-    i += 1
+        i += 1
 
-features = np.array(features)
+    features_out = np.array(features_out)
+    #get all values into a single column for modeling
+    features_out = features_out.reshape(-1, features_out.shape[3])
+    return(features_out)
 
-#convert to traditional syntax of X & Y
-X = features
-#combine all pixels into rows for feature columns - we need to do this so 
-#that we can feed this into RF model
-X = X.reshape(-1,X.shape[3])
+#### training features ####
+X = get_features(X_train)
 
 #reshape Y to match X
-Y = train_masks.reshape(-1)
+Y = y_train.reshape(-1)
 
 #Here we want to drop pixels with a value of 0 as it is unlabeled and
 #not worth wasting resources on to detect.
 
-#Create df to use for ML models - add Y as our label for this train data
 df = pd.DataFrame(X)
 df['Label'] = Y
 
-#Look to verify lables are correct (i.e. not all blank)
+#Look to verify labels are correct (i.e. not all blank)
 #print(df['Label'].unique()) #get different label values (pixel values)
 #print(df['Label'].value_counts()) #get sum of each pixel value
 
@@ -147,22 +137,21 @@ df2 = df[df['Label'] != 0]
 
 #set X & y training from df for ML models
 X_train = df2.drop(labels=['Label'], axis=1)
-X_train = X_train.values #convert to array
+X_train = np.asarray(X_train) #convert to array
+#X_train = X_train.values 
 Y_train = df2['Label']
-Y_train = Y_train.values #convert to arrary
+Y_train = np.asarray(Y_train) #convert to array
+#Y_train = Y_train.values #convert to arrary
 
-### Same thing for test images, need to read in images and get features ###
-#load test features from test images/masks
-test_images = []
-for i in sorted(glob.glob(os.path.join(test_img_path, "*.tif"))):
-    test_img_in = cv2.imread(i, 0) 
-    test_img_in = cv2.cvtColor(test_img_in, cv2.COLOR_RGB2BGR)
-    test_images.append(test_img_in)
 
-test_images  = np.array(test_images)
+###### testing features ######
+#get test files brought in to match dimensions
+test_images = get_files(my_dir, test_img_path, 1)
+test_masks = get_files(my_dir, test_mask_path, 0)
 
 #send test images through VGG16 model to get weights (one at a time)
-test_img_pred = []
+test_img_pred = get_features(test_images)
+
 i = 0
 
 while i < len(test_images):
