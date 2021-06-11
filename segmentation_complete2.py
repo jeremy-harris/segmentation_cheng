@@ -177,7 +177,7 @@ x_test_norm = preprocessing.normalize(x_test) #x test values
 from sklearn.decomposition import PCA
 pca = PCA(.99) #setup PCA so that it will retain 99% of the variance
 pca.fit(X_train_norm) #get PCAs of the training images/features
-pca.n_components_ #this shows that we only need 25 components to achieve 99%
+#pca.n_components_ #this shows that we only need 25 components to achieve 99%
 
 #apply pca to transform training and testing images
 X_train_pca = pca.transform(X_train_norm)
@@ -186,6 +186,88 @@ x_test_pca = pca.transform(x_test_norm)
 #save off pca for later use
 with open(git_dir+'pca.pkl', 'wb') as pickle_file:
     pickle.dump(pca, pickle_file)
+
+############################################################
+#################     lightgbm        ######################
+############################################################
+import lightgbm as lgb
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+import random
+
+#create dataset for lgb
+lgb_data = lgb.Dataset(X_train_pca, label=Y_train)
+
+#setup base parameters
+lgb_params = {'learning_rate': 0.1,
+              'num_leaves': 50,
+              'num_trees': 50,
+              'num_threads': 10,
+              'min_data_in_leaf': 0,
+              'min_sum_hessian_in_leaf': 100,
+              'num_iterations': 50}
+
+lgb_base = lgb.train(lgb_params, lgb_data)
+
+#save model
+#lgb_base_name = 'lgb_base.sav'
+#pickle.dump(lgb_base, open(git_dir+lgb_base_name, 'wb'))
+
+#############################
+### random tune lgb model ### to get the initial best parameters dialed in 
+lgb_tune_params = {'num_trees':range(5,100,5),
+                  'num_threads':[8],
+                  'num_leaves':range(5,100,5),
+                  'num_iterations':range(10, 50, 5),
+                  'min_sum_hessian_in_leaf':range(1, 20, 5),
+                  'min_data_in_leaf':range(0,5,1),
+                  'max_depth':range(5,20,1),
+                  'learning_rate': np.linspace(0.1,1,10),
+                  'objective':['multiclass'],
+                  'num_class':[3]
+                  }
+
+#setup random tuning with parameters above
+est_lgb = lgb.LGBMRegressor()
+lgb_random = RandomizedSearchCV(estimator = est_lgb,
+                               param_distributions = lgb_tune_params,
+                               cv = 3,
+                               verbose=1,
+                               random_state=42,
+                               n_jobs = 8) #use 8 processors
+
+Y_train = Y_train-1 #convert to 0 & 1 for binary instead of multiclass
+#run random tuning on lgb
+random.seed(30)
+lgb_tuned_random = lgb_random.fit(X_train_pca, Y_train)
+
+lgb_random.best_params_
+
+##################
+### GridSearch ### to dial in best params from random search
+lgb_tune_params2 = {'num_trees':[8,9,10,11],
+                   'num_threads':[8],
+                   'num_leaves':[33,34,35,36,37],
+                   'num_iterations':[13,14,15,16,17],
+                   'min_sum_hessian_in_leaf':[1,2,3],
+                   'min_data_in_leaf':[1,2,3],
+                   'max_depth':[9,10,11,12],
+                   'learning_rate': np.linspace(0.7,1,5),
+                   'objective':['binary'],
+                   'seed':[30]
+                   }
+
+lgb_grid = GridSearchCV(estimator=est_lgb,
+                        param_grid=lgb_tune_params2,
+                        cv=3,
+                        verbose = 1,
+                        n_jobs = 8)
+
+random.seed(30)
+lgb_tuned_grid = lgb_grid.fit(X_train_pca, Y_train)
+
+lgb_random.best_params_
+
+#lgb_pred = lgb_base.predict(x_test_pca)
 
 
 ############################################################
@@ -201,6 +283,7 @@ xg_params = {'max_depth':8, 'eta':.5, 'objective':'multi:softmax',
              'gamma':0, 'n_estimators':100, 'subsample':0.9}
 num_round = 1000
 
+'''
 #train model with cpu --- no pca, no norm
 xgb_t1 = time.time()
 xgb_model = XGB()
@@ -209,7 +292,6 @@ xgb_base = xgb_model.fit(X_train, Y_train) #non-pca
 xgb_t2 = time.time()
 print("Base XGB Elapsed time in seconds: ", round(xgb_t2 - xgb_t1))
 #####################################################
-# 40x CPU - model time with params above was 14 seconds  #
 
 #save model
 xg_base_name = 'XG_base_3NoPCA.sav'
@@ -229,32 +311,23 @@ print("Base XGB Elapsed time in seconds: ", round(xgb_t2 - xgb_t1))
 #save model
 xg_baseNORM_name = 'XG_base_3Norm.sav'
 pickle.dump(xgb_baseNORM, open(xg_baseNORM_name, 'wb'))
-
+'''
 #############
 #train model with cpu --- NORM & PCA
 xgb_t1 = time.time()
 xgb_model = XGB()
 xgb_model.set_params(**xg_params)
-xgb_basePCA = xgb_model.fit(X_train_pca, Y_train) 
+xgb_base = xgb_model.fit(X_train_pca, Y_train) 
 xgb_t2 = time.time()
 print("Base XGB Elapsed time in seconds: ", round(xgb_t2 - xgb_t1))
 #####################################################
-# 40x CPU - model time with params above was 13 seconds  #
 
 #save model
-xg_basePCA_name = 'XG_base_3PCA.sav'
-pickle.dump(xgb_basePCA, open(xg_basePCA_name, 'wb'))
+xg_base_name = 'XG_base.sav'
+pickle.dump(xgb_base, open(git_dir+xg_base_name, 'wb'))
 
-
-
-
-
-#####  Random Tuning CPU #####
+#######  Model Tuning ########
 ##############################
-'''
-#Attempt to change output location to keep from fillng up HD for gpu usage
-#import os
-#os.environ['JOBLIB_TEMP_FOLDER'] = '/mnt/MLshare'
 
 #set parameters for gridsearch tuning
 xg_tune_params = {'max_depth':range(3,30,10),
@@ -264,20 +337,26 @@ xg_tune_params = {'max_depth':range(3,30,10),
                   'subsample':np.linspace(.1, 1, 10),
                   'colsample_bytree':np.linspace(.1,1,10),
                   'eval_metric':['mlogloss'],
-                  'num_class':[4],
+                  'num_class':[3],
                   'tree_method':['hist'],
                   'seed':[30]}
 
 # Random search of parameters, using 3 fold cross validation, 
 # search across 200 different combinations, and use all available cores
 xg = XGB()
-xg_random2 = RandomizedSearchCV(estimator = xg,
-                               param_distributions = xg_tune_params2,
-                               n_iter = 50, #try 200 dif. random combos
+xg_random = RandomizedSearchCV(estimator = xg,
+                               param_distributions = xg_tune_params,
+                               n_iter = 50, #try 50 dif. random combos
                                cv = 3,
                                verbose=2,
                                random_state=42,
-                               n_jobs = -1) #all but 1 processors
+                               n_jobs = 8) #use 8 processors
+t1 = time.time()
+random.seed(30)
+xg_tuned_random = xg_random.fit(X_train_pca, Y_train)
+t2 = time.time()
+print("Time in Minutes to Tune: " + str(round((t2-t1)/60)))
+
 
 ### Grid Search ###
 #Dial in from the Random Grid search tuning
