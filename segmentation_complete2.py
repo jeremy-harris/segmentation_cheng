@@ -89,7 +89,7 @@ new_model = Model(
 #new_model.summary()
 
 #save model for later use
-new_model.save('./segmentation_cheng/new_model.h5')
+#new_model.save('./segmentation_cheng/new_model.h5')
 
 ##################################################
 ##########     Generate Features   ###############
@@ -147,6 +147,13 @@ def make_df(x, y):
     return(X, Y)
 
 X_train, Y_train = make_df(X, Y)
+Y_train = Y_train-1
+'''
+print(np.unique(Y_train)) #verify that there are 3 classes: 1, 2, 3
+(unique, counts) = np.unique(Y_train, return_counts=True)
+freq = np.asarray((unique, counts)).T
+print(freq)
+'''
 
 ###### testing features ######
 #get test files brought in to match dimensions
@@ -154,10 +161,12 @@ test_images = get_files(my_dir, test_img_path, 1)
 test_masks = get_files(my_dir, test_mask_path, 0)
 
 #send test images through VGG16 model to get weights (one at a time)
-x_test = get_features(test_images)
-y_test = test_masks.reshape(-1)
+x = get_features(test_images)
+y = test_masks.reshape(-1)
 
-x_test, y_test = make_df(x_test, y_test)
+x_test, y_test = make_df(x, y)
+y_test = y_test-1
+#print(np.unique(y_test)) #verify that there are 3 classes: 1,2,3
 
 ##############################################################
 #################     Pre-Processing     #####################
@@ -175,254 +184,87 @@ x_test_norm = preprocessing.normalize(x_test) #x test values
 ### PCA ###
 #PCA for reduction of the size of data (reduce 64 features to 25)
 from sklearn.decomposition import PCA
-pca = PCA(.99) #setup PCA so that it will retain 99% of the variance
-pca.fit(X_train_norm) #get PCAs of the training images/features
-#pca.n_components_ #this shows that we only need 25 components to achieve 99%
+
+pca_train = PCA(.99) #setup PCA so that it will retain 99% of the variance
+pca_train.fit(X_train_norm) #get PCAs of the training images/features
+#pca_train.n_components_ #this shows that we only need 25 components to achieve 99%
+
+pca_test = PCA(.99) #setup PCA so that it will retain 99% of the variance
+pca_test.fit(x_test_norm) #get PCAs of the training images/features
+#pca_test.n_components_ #this shows that we only need 25 components to achieve 99%
 
 #apply pca to transform training and testing images
-X_train_pca = pca.transform(X_train_norm)
-x_test_pca = pca.transform(x_test_norm)
+X_train_pca = pca_train.transform(X_train_norm)
+x_test_pca = pca_test.transform(x_test_norm)
 
-#save off pca for later use
-with open(git_dir+'pca.pkl', 'wb') as pickle_file:
-    pickle.dump(pca, pickle_file)
+#save off pca's for later use
+
+'''
+with open(git_dir+'pca_train.pkl', 'wb') as pickle_file:
+    pickle.dump(pca_train, pickle_file)
+    
+with open(git_dir+'pca_test.pkl', 'wb') as pickle_file:
+    pickle.dump(pca_test, pickle_file)
+'''
 
 ############################################################
 #################     lightgbm        ######################
 ############################################################
 import lightgbm as lgb
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from sklearn.metrics import accuracy_score
 import random
+
+lgb_engine=lgb.LGBMClassifier()
 
 #create dataset for lgb
 lgb_data = lgb.Dataset(X_train_pca, label=Y_train)
+lgb_val = lgb.Dataset(x_test_pca, label=y_test)
 
-#setup base parameters
-lgb_params = {'learning_rate': 0.1,
-              'num_leaves': 50,
-              'num_trees': 50,
-              'num_threads': 10,
-              'min_data_in_leaf': 0,
-              'min_sum_hessian_in_leaf': 100,
-              'num_iterations': 50}
-
-lgb_base = lgb.train(lgb_params, lgb_data)
-
-#save model
-#lgb_base_name = 'lgb_base.sav'
-#pickle.dump(lgb_base, open(git_dir+lgb_base_name, 'wb'))
-
-#############################
 ### random tune lgb model ### to get the initial best parameters dialed in 
-lgb_tune_params = {'num_trees':range(5,100,5),
-                  'num_threads':[8],
-                  'num_leaves':range(5,100,5),
-                  'num_iterations':range(10, 50, 5),
-                  'min_sum_hessian_in_leaf':range(1, 20, 5),
-                  'min_data_in_leaf':range(0,5,1),
-                  'max_depth':range(5,20,1),
-                  'learning_rate': np.linspace(0.1,1,10),
-                  'objective':['multiclass'],
-                  'num_class':[3]
-                  }
+random_params = {
+    'learning_rate': np.linspace(.1, 1, 10),
+    'num_trees':range(1, 10, 1),
+    'num_leaves':range(10,80,5),
+    'max_depth':range(2,10,1),
+    'min_sum_hessian_in_leaf':range(1,10,1),
+    'num_threads':[8],
+    'objective':['multiclass'],
+    'num_class':[3]          
+    }
 
 #setup random tuning with parameters above
-est_lgb = lgb.LGBMRegressor()
-lgb_random = RandomizedSearchCV(estimator = est_lgb,
-                               param_distributions = lgb_tune_params,
-                               cv = 3,
-                               verbose=1,
-                               random_state=42,
-                               n_jobs = 8) #use 8 processors
+lgb_random = RandomizedSearchCV(lgb_engine, random_params, verbose=1,
+                                cv=5, random_state=42) 
 
-Y_train = Y_train-1 #convert to 0 & 1 for binary instead of multiclass
 #run random tuning on lgb
-random.seed(30)
-lgb_tuned_random = lgb_random.fit(X_train_pca, Y_train)
+rand_tune = lgb_random.fit(X_train_pca, Y_train)
 
-lgb_random.best_params_
-
-##################
-### GridSearch ### to dial in best params from random search
-lgb_tune_params2 = {'num_trees':[8,9,10,11],
-                   'num_threads':[8],
-                   'num_leaves':[33,34,35,36,37],
-                   'num_iterations':[13,14,15,16,17],
-                   'min_sum_hessian_in_leaf':[1,2,3],
-                   'min_data_in_leaf':[1,2,3],
-                   'max_depth':[9,10,11,12],
-                   'learning_rate': np.linspace(0.7,1,5),
-                   'objective':['binary'],
-                   'seed':[30]
-                   }
-
-lgb_grid = GridSearchCV(estimator=est_lgb,
-                        param_grid=lgb_tune_params2,
-                        cv=3,
-                        verbose = 1,
-                        n_jobs = 8)
-
-random.seed(30)
-lgb_tuned_grid = lgb_grid.fit(X_train_pca, Y_train)
-
-lgb_random.best_params_
-
-#lgb_pred = lgb_base.predict(x_test_pca)
-
-
-############################################################
-#################     XG Boosting     ######################
-############################################################
-from xgboost import XGBClassifier as XGB
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
-
-### XGB Base ###
-#set base parameters
-xg_params = {'max_depth':8, 'eta':.5, 'objective':'multi:softmax',
-             'eval_metric':'mlogloss', 'num_class':3, 'tree_method':'hist',
-             'gamma':0, 'n_estimators':100, 'subsample':0.9}
-num_round = 1000
-
+rand_tune.best_params_
 '''
-#train model with cpu --- no pca, no norm
-xgb_t1 = time.time()
-xgb_model = XGB()
-xgb_model.set_params(**xg_params)
-xgb_base = xgb_model.fit(X_train, Y_train) #non-pca
-xgb_t2 = time.time()
-print("Base XGB Elapsed time in seconds: ", round(xgb_t2 - xgb_t1))
-#####################################################
-
-#save model
-xg_base_name = 'XG_base_3NoPCA.sav'
-pickle.dump(xgb_base, open(xg_base_name, 'wb'))
-
-############
-#train model with cpu --- NORM, no pca
-xgb_t1 = time.time()
-xgb_model = XGB()
-xgb_model.set_params(**xg_params)
-xgb_baseNORM = xgb_model.fit(X_train_norm, Y_train) #NORM non-pca
-xgb_t2 = time.time()
-print("Base XGB Elapsed time in seconds: ", round(xgb_t2 - xgb_t1))
-#####################################################
-# 40x CPU - model time with params above was 15 seconds  #
-
-#save model
-xg_baseNORM_name = 'XG_base_3Norm.sav'
-pickle.dump(xgb_baseNORM, open(xg_baseNORM_name, 'wb'))
+{'objective': 'multiclass',
+ 'num_trees': 7,
+ 'num_threads': 8,
+ 'num_leaves': 75,
+ 'num_class': 3,
+ 'min_sum_hessian_in_leaf': 1,
+ 'min_data_in_leaf': 5,
+ 'max_depth': 7,
+ 'learning_rate': 0.2}
 '''
-#############
-#train model with cpu --- NORM & PCA
-xgb_t1 = time.time()
-xgb_model = XGB()
-xgb_model.set_params(**xg_params)
-xgb_base = xgb_model.fit(X_train_pca, Y_train) 
-xgb_t2 = time.time()
-print("Base XGB Elapsed time in seconds: ", round(xgb_t2 - xgb_t1))
-#####################################################
+best_params = rand_tune.best_params_
+
+gbm = lgb.train(best_params, lgb_data, num_boost_round=20, valid_sets=lgb_val, early_stopping_rounds=5)
+
+
+#### predict and get accuracy
+y_pred = rand_tune.predict(x_test_pca)
+accuracy = accuracy_score(y_pred, y_test)
+print('Lightgbm accuracy: {0:0.4f}'.format(accuracy))
 
 #save model
-xg_base_name = 'XG_base.sav'
-pickle.dump(xgb_base, open(git_dir+xg_base_name, 'wb'))
-
-#######  Model Tuning ########
-##############################
-
-#set parameters for gridsearch tuning
-xg_tune_params = {'max_depth':range(3,30,10),
-                  'eta': np.linspace(0.2,1,10),
-                  'objective':['multi:softmax'],
-                  'min_child_weight':range(1,10,10),
-                  'subsample':np.linspace(.1, 1, 10),
-                  'colsample_bytree':np.linspace(.1,1,10),
-                  'eval_metric':['mlogloss'],
-                  'num_class':[3],
-                  'tree_method':['hist'],
-                  'seed':[30]}
-
-# Random search of parameters, using 3 fold cross validation, 
-# search across 200 different combinations, and use all available cores
-xg = XGB()
-xg_random = RandomizedSearchCV(estimator = xg,
-                               param_distributions = xg_tune_params,
-                               n_iter = 50, #try 50 dif. random combos
-                               cv = 3,
-                               verbose=2,
-                               random_state=42,
-                               n_jobs = 8) #use 8 processors
-t1 = time.time()
-random.seed(30)
-xg_tuned_random = xg_random.fit(X_train_pca, Y_train)
-t2 = time.time()
-print("Time in Minutes to Tune: " + str(round((t2-t1)/60)))
-
-
-### Grid Search ###
-#Dial in from the Random Grid search tuning
-xg = XGB()
-xg_tune_params2 = {'max_depth':[7, 8, 9],
-                  'eta': np.linspace(0.1, 0.3, 5),
-                  'objective':['multi:softmax'],
-                  'min_child_weight':[1],
-                  'subsample':np.linspace(0.7, 0.9, 5),
-                  'colsample_bytree':[1],
-                  'eval_metric':['mlogloss'],
-                  'num_class':[3],
-                  'tree_method':['hist'],
-                  #'predictor':['gpu_predictor'], #use gpu to predict
-                  'gpu_id':[0],
-                  'seed':[30]}
-
-#assign model with parameters
-xg_tuned2 = GridSearchCV(xg, xg_tune_params2,
-                         cv = 3, n_jobs = -1, verbose=2)
-
-#Find best model using only 3 classes
-t1 = time.time()
-
-random.seed(30)
-xg_tuned = xg_tuned2.fit(X_train, Y_train) #no pca or normalization
-t2 = time.time()
-
-print("Time in Minutes to Tune: " + str(round((t2-t1)/60)))
-#40 core workstation: 119 minutes for above random grid
-
-
-##### TUNE WITH GRID SEARCH ###
-#tune with random grid
-t1 = time.time()
-
-random.seed(30)
-xg_tuned = xg_random2.fit(X_train_pca, Y_train)
-t2 = time.time()
-
-print("Time in Minutes to Tune: " + str(round((t2-t1)/60)))
-#40 core workstation: 119 minutes for above random grid
-
-#print best parameters
-print(xg_random2.best_params_)
-
-##### Hard Set Parameters from XGB Model ######
-xg_best_params = xg_random2.best_params_
-xg_best_params['predictor'] = 'gpu_predictor' #allow gpu for predictions
-xg_best_params['gpu_id'] = 0     #assign gpu0 as the default gpu
-
-#create XGB model with params
-xg_gpu_mod = XGB(xg_best_params)
-
-t1 = time.time()
-
-random.seed(30)
-xg_best_gpu = xg_gpu_mod.fit(X_train_pca, Y_train)
-
-t2=time.time()
-print("Time in Minutes to Tune: " + str(round((t2-t1)/60)))
-# Time to tune on 40 core system:   2 minutes
-
-#save model
-xg_tuned_gpu_name = 'XG_gpu_tuned.sav'
-pickle.dump(xg_tuned, open(xg_tuned_gpu_name, 'wb'))
+lgb_mod_name = 'lgb_mod.sav'
+pickle.dump(git_dir+rand_tune, open(lgb_mod_name, 'wb'))
 
 '''
 ###################################################################
