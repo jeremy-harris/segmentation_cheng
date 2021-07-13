@@ -39,7 +39,7 @@ mask_path = "./train_masks/"
 def get_files(c_dir, path, cv2_flag): #flag 1 = color, 0 = grayscale
     os.chdir(c_dir)
     files = []
-    for i in sorted(glob.glob(os.path.join(path, "*.tif"))):
+    for i in sorted(glob.glob(os.path.join(path, "*.*"))):
         img = cv2.imread(i, cv2_flag)
         if cv2_flag == 1:
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
@@ -276,16 +276,15 @@ print('Class 3 (other): ' + str(class3_IoU))
 from PIL import Image
 from numpy import asarray
 
-#####################################
-######  Prep Images to Segment ######
-#####################################
+#set path to images
+new_img_path = "new_images_in/"
+pred_output = "output_images_gabor/"
 
-#input folder path where images are stored
-new_images_in = my_dir+'new_images_in/' #must have / at the end
+#load, process and predict on new images
+new_images = get_files(my_dir, new_img_path, 1)
 
-#output folder path
-pred_images_out = my_dir+'output_images_gabor' #folder to save output images
 
+#crop images to match model dimension images
 #crop image dimensions
 left = 0
 top = 165
@@ -293,34 +292,46 @@ right = 2262
 bottom = 530
 
 #get all files names in folder to iterate through
-new_in_folder = os.listdir(new_images_in)
+new_in_folder = os.listdir(new_images)
 
-#set shape of new images to revert back to after processing
-img_shape = Image.open(new_images_in+new_in_folder[0])
-img_shape = img_shape.crop((left, top, right, bottom))
-img_shape = asarray(img_shape)
-img_shape = img_shape.shape[-3:-1]
-
-#####################################
-######  Segment and Save Images #####
-#####################################
-
-#load, process, predict, reshape and save each image
+###### crop new images to match model ######
+new_cropped = []
 for img in new_in_folder:
-    image = Image.open(new_images_in+img) #read in 1 image at a time
+    image = Image.open(my_dir+new_img_path+img) #read in 1 image at a time
     cropped = image.crop((left, top, right, bottom)) #crop image
     img_array = asarray(cropped) #convert to array
     new_img = np.expand_dims(img_array, axis=0) #shape for VGG16
-    new_img = new_model.predict(new_img) #get VGG16 weights
-    new_features = new_img.reshape(-1, new_img.shape[3]) #shape
+    new_img = np.squeeze(new_img)
+    new_cropped.append(new_img)
+new_cropped = np.array(new_cropped)
+cropped_shape = new_cropped.shape[1:3] #get shape of cropped image for later use
+
+###### get features one by one and output prediction #######  
+
+i=0
+for img in new_cropped:
+    #get name
+    img_name = new_in_folder[i]
+    #get vgg16 features
+    img = new_cropped[0]
+    img_in = np.expand_dims(img, axis=0)
+    X1_new = get_features(img_in)
+    X1_new = pd.DataFrame(X1_new)
+
+    #get gabor features
+    X2_new = get_gabor(img_in, 5)
+    X2_new = pd.DataFrame(X2_new)
     
-    #predict with chosen model (above -- uncomment model) here
-    new_preds = lgb_model.predict(new_features)
+    #add VGG features and gabor features together
+    df2 = pd.concat([X1_new, X2_new], axis=1)
+
+    #predict on image
+    new_pred = lgb_model.predict(df2)
     
-    #shape into image file
-    new_pred_img = new_preds.reshape(img_shape)
+    #shape into original image shape
+    new_pred_img = new_pred.reshape(cropped_shape)
     
     #save image to chosen folder (above)
-    plt.imsave(pred_images_out+img, new_pred_img, cmap='gray')
-
+    plt.imsave(my_dir+pred_output+img_name, new_pred_img, cmap='gray')
+    i += 1
 
