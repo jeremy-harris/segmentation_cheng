@@ -111,10 +111,9 @@ def get_features(input_array):
 X1 = get_features(train_images)
 X1 = pd.DataFrame(X1)
 
-
-### get gabor features ###
-
-def get_gabor(input_array, ksize):
+'''
+### tone to get gabor features ###
+def get_gabor(input_array):
     i=0
     df_out = pd.DataFrame()
     while i < len(input_array):
@@ -124,32 +123,34 @@ def get_gabor(input_array, ksize):
         df = pd.DataFrame()
         df['orig'] = img
         num = 1  #To count numbers up in order to give Gabor features a label in the data frame
-        #kernels = []
+        kernels = []
 
-        for theta in range(2):   #Define number of thetas
-            theta = theta / 4. * np.pi
-            for sigma in (1, 3):  #Sigma with 1 and 3
-                for lamda in np.arange(0, np.pi, np.pi / 4):   #Range of wavelengths
-                    for gamma in (0.05, 0.5):   #Gamma values of 0.05 and 0.5
+        for theta in (0, np.pi*.125, np.pi*.25, np.pi*.375, np.pi*.5, np.pi*.675, np.pi*.75, np.pi*.875): #orientation on 360 degree 
+            for sigma in (1, 5, 10):  #size of the envelope and lines
+                for lamda in (3, 5, 10):   #length of the wavelength
+                    for gamma in (.05, .1):   #height of the gabor feature
+                        for ksize in (5, 25, 45):
                             
-                        gabor_label = 'Gabor' + str(num)  #Label Gabor columns as Gabor1, Gabor2, etc.
-                        kernel = cv2.getGaborKernel((ksize, ksize), sigma, theta, lamda, gamma, 0, ktype=cv2.CV_32F)    
-                        #kernels.append(kernel)
-                        #Now filter the image and add values to a new column 
-                        fil_img = cv2.filter2D(img, cv2.CV_8UC3, kernel)
-                        fil_img = fil_img.reshape(-1)
-                        df[gabor_label] = fil_img  #Labels columns as Gabor1, Gabor2, etc.
-                        print(gabor_label, ': theta=', theta, ': sigma=', sigma, ': lamda=', lamda, ': gamma=', gamma)
-                        num += 1  #Increment for gabor column label
+                            gabor_label = 'Gabor' + str(num)  #Label Gabor columns as Gabor1, Gabor2, etc.
+                            kernel = cv2.getGaborKernel((ksize, ksize), sigma, theta, lamda, gamma, 0, ktype=cv2.CV_32F)    
+                            kernels.append(kernel)
+                            #Now filter the image and add values to a new column 
+                            fil_img = cv2.filter2D(img, cv2.CV_8UC3, kernel)
+                            fil_img = fil_img.reshape(-1)
+                            df[gabor_label] = fil_img  #Labels columns as Gabor1, Gabor2, etc.
+                            print(gabor_label, ': theta=', theta, ': sigma=', sigma, ': lamda=', lamda, ': gamma=', gamma, ': ksize=', ksize)
+                            num += 1  #Increment for gabor column label
+        print(i, " of ", len(input_array))
+
         
         #img_label = 'img_'+str(i)
         df_out = df_out.append(df, ignore_index=True)
                
         i += 1
         
-    return(df_out)
+    return(df_out, kernels)
 
-X2 = get_gabor(train_images, 5)
+X2, kernels = get_gabor(train_images)
 
 #add VGG features and gabor features together
 df = pd.concat([X1, X2], axis=1)
@@ -157,18 +158,208 @@ df = pd.concat([X1, X2], axis=1)
 #reshape Y to match X
 Y = train_masks.reshape(-1)
 
+df['label'] = Y
+
+#drop features that don't record a value (i.e. sum of values = 0)
+df.drop([col for col, val in df.sum().iteritems() if val ==0], axis=1, inplace=True)
+
 #Drop pixels with value of 0 -- no need to detect the background in this case
 df = df[df['label'] != 0]
 
 #set X & Y training from df for ML models
 X = df.drop(labels=['label'], axis=1)
-X = np.asarray(X) #convert to array
+'''
+##### Build Specific features based on model tuning/performance ######
+gabor_data = [
+    ['g_01', 25, 5, 2.12, 10, .1, 0, 'cv2.CV_32F'],
+    ['g_02', 45, 10, 0.39, 10, .1, 0, 'cv2.CV_32F'],
+    ['g_03', 45, 5, 2.12, 10, .1, 0, 'cv2.CV_32F'],
+    ['g_04', 45, 5, 0.785, 3, .05, 0, 'cv2.CV_32F'],
+    ['g_05', 45, 5, 1.178, 10, .1, 0, 'cv2.CV_32F'],
+    ['g_06', 45, 5, 0.39, 3, .05, 0, 'cv2.CV_32F'],
+    ['g_07', 45, 10, 0.785, 3, .05, 0, 'cv2.CV_32F'],
+    ['g_08', 45, 10, 0.39, 3, .05, 0, 'cv2.CV_32F'],
+    ['g_09', 5, 10, 1.178, 5, .05, 0, 'cv2.CV_32F'],
+    ['g_10', 45, 5, 0.39, 3, .1, 0, 'cv2.CV_32F'],
+    ['g_11', 45, 10, 0.39, 10, .05, 0, 'cv2.CV_32F'],
+    ['g_12', 45, 10, 0.785, 3, .1, 0, 'cv2.CV_32F'],
+    ['g_13', 5, 5, 0.0, 5, .05, 0, 'cv2.CV_32F'],
+    ['g_14', 45, 10, 0.0, 5, .05, 0, 'cv2.CV_32F'],
+    ['g_15', 45, 10, 0.0, 5, .1, 0, 'cv2.CV_32F'],
+    ['g_16', 45, 10, 0.785, 5, .1, 0, 'cv2.CV_32F'],
+    ['g_17', 25, 5, 2.12, 10, .05, 0, 'cv2.CV_32F'],
+    ['g_18', 45, 10, 0.0, 3, .1, 0, 'cv2.CV_32F'],
+    ['g_19', 5, 5, 0.785, 3, .05, 0, 'cv2.CV_32F'],
+    ['g_20', 45, 10, 1.178, 10, .1, 0, 'cv2.CV_32F'],
+    ['g_21', 45, 5, 1.78, 10, .05, 0, 'cv2.CV_32F'],
+    ['g_22', 25, 5, 0.785, 3, .05, 0, 'cv2.CV_32F'],
+    ['g_23', 45, 5, 1.178, 5, .05, 0, 'cv2.CV_32F'],
+    ['g_24', 25, 5, 2.12, 5, .05, 0, 'cv2.CV_32F'],
+    ['g_25', 25, 5, 0.0, 3, .05, 0, 'cv2.CV_32F'],
+    ['g_26', 45, 5, 2.12, 10, .05, 0, 'cv2.CV_32F'],
+    ['g_27', 25, 10, 0.39, 3, .1, 0, 'cv2.CV_32F'],
+    ['g_28', 45, 5, 0.785, 5, .05, 0, 'cv2.CV_32F']
+    ]
+g_df = pd.DataFrame(gabor_data, columns =['num', 'ksize', 'sigma', 'theta', 'lamda', 'gamma', 'psi', 'ktype'])
+g_ar = np.asarray(g_df)
 
+def get_tuned_gabors(input_array):
+    i=0
+    df_out = pd.DataFrame()
+    while i < len(input_array):
+        img = input_array[i]
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = img.reshape(-1)
+        df = pd.DataFrame()
+        df['orig'] = img
+        num = 1  #To count numbers up in order to give Gabor features a label in the data frame
+        kernels = []
+
+        print("")        
+        print(i+1, " of ", len(input_array))
+        for g in range(0, len(g_ar)):
+            ksize = g_ar[g,1]
+            sigma = g_ar[g,2]
+            theta = g_ar[g,3]
+            lamda = g_ar[g,4]
+            gamma = g_ar[g,5]
+            
+            gabor_label = 'Gabor' + str(num)
+            kern = cv2.getGaborKernel((ksize, ksize), sigma, theta, lamda, gamma, 0, ktype=cv2.CV_32F)
+            kernels.append(kern)
+            
+            #Now filter the image and add values to a new column 
+            fil_img = cv2.filter2D(img, cv2.CV_8UC3, kern)
+            fil_img = fil_img.reshape(-1)
+            df[gabor_label] = fil_img  #Labels columns as Gabor1, Gabor2, etc.
+            print(gabor_label, ': theta=', theta, ': sigma=', sigma, ': lamda=', lamda, ': gamma=', gamma, ': ksize=', ksize)
+            num += 1  #Increment for gabor column label
+        
+        
+
+        
+        #img_label = 'img_'+str(i)
+        df_out = df_out.append(df, ignore_index=True)
+               
+        i += 1
+        
+    return(df_out, kernels)
+
+X_gab, kerns2 = get_tuned_gabors(train_images)
+
+########## get other filters ##########
+#CANNY EDGE
+from skimage.filters import roberts, sobel, scharr
+from scipy import ndimage as nd
+from tqdm import tqdm
+
+def get_filters(input_array):
+    i=0
+    df_out = pd.DataFrame()
+    for i in tqdm(range(0, len(input_array)), desc="Getting Filters"):
+        img = input_array[i]
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        df = pd.DataFrame()
+        filters = []
+    
+        #canny edge    
+        edges = cv2.Canny(img, 100,200)   #Image, min and max values
+        edges1 = edges.reshape(-1)
+        df['canny'] = edges1 #Add column to original dataframe
+        filters.append(edges)
+
+        #ROBERTS EDGE
+        edge_roberts = roberts(img)
+        edge_roberts1 = edge_roberts.reshape(-1)
+        df['roberts'] = edge_roberts1
+        filters.append(edge_roberts)
+
+        #SOBEL
+        edge_sobel = sobel(img)
+        edge_sobel1 = edge_sobel.reshape(-1)
+        df['sobel'] = edge_sobel1
+        filters.append(edge_sobel)
+
+        #SCHARR
+        edge_scharr = scharr(img)
+        edge_scharr1 = edge_scharr.reshape(-1)
+        df['scharr'] = edge_scharr1
+        filters.append(edge_scharr)
+        
+        #GAUSSIAN with sigma=3
+        gaussian_img = nd.gaussian_filter(img, sigma=3)
+        gaussian_img1 = gaussian_img.reshape(-1)
+        df['gaussianS3'] = gaussian_img1
+        filters.append(gaussian_img)
+        
+        #GAUSSIAN with sigma=7
+        gaussian_img2 = nd.gaussian_filter(img, sigma=7)
+        gaussian_img3 = gaussian_img2.reshape(-1)
+        df['gaussianS7'] = gaussian_img3
+        filters.append(gaussian_img2)
+        
+        #MEDIAN with sigma=3
+        median_img = nd.median_filter(img, size=3)
+        median_img1 = median_img.reshape(-1)
+        df['median'] = median_img1
+        filters.append(median_img)
+        
+        df_out = df_out.append(df, ignore_index=True)
+               
+        i += 1
+        
+    return(df_out, filters)
+
+X_fil, filters = get_filters(train_images)
+
+
+########################################
+
+
+#add VGG features and gabor features together
+df = pd.concat([X1, X_gab, X_fil], axis=1)
+
+#reshape Y to match X
+Y = train_masks.reshape(-1)
+
+df['label'] = Y
+
+#drop features that don't record a value (i.e. sum of values = 0)
+#df.drop([col for col, val in df.sum().iteritems() if val ==0], axis=1, inplace=True)
+
+#Drop pixels with value of 0 -- no need to detect the background in this case
+df = df[df['label'] != 0]
+
+#set X & Y training from df for ML models
+X = df.drop(labels=['label'], axis=1)
+
+#setup Y for lightgbm models
 Y = df['label']
-Y = np.asarray(Y) #convert to array
 Y = Y.astype(int)
 
 Y = Y-1 #must start at 0 for lightgbm to work properly
+
+'''
+### PCA ###
+#PCA for reduction of the size of data
+from sklearn.decomposition import PCA
+pca = PCA(.99) #setup PCA so that it will retain 99.9% of the variance
+pca.fit(X) #get PCAs of the training images/features
+pca.n_components_ 
+
+#save off pca for later use
+#with open('pca.pkl', 'wb') as pickle_file:
+#    pickle.dump(pca, pickle_file)
+
+#apply pca to transform training and testing images
+X_pca = pca.transform(X)
+
+#setup Y for lightgbm models
+Y = df['label']
+Y = Y.astype(int)
+
+Y = Y-1 #must start at 0 for lightgbm to work properly
+'''
 '''
 print(np.unique(Y_train)) #verify that there are 3 classes: 0, 1, 2
 (unique, counts) = np.unique(Y_train, return_counts=True)
@@ -269,6 +460,25 @@ class3_IoU = values[2,2]/(values[2,0] + values[2,1] + values[2,2] +
 print('Class 1 (wood pellet): ' + str(class1_IoU))
 print('Class 2 (ldpe): ' + str(class2_IoU))
 print('Class 3 (other): ' + str(class3_IoU))
+'''
+base vgg16 results (64 features)
+Class 1 (wood pellet): 0.68524706
+Class 2 (ldpe): 0.95273745
+Class 3 (other): 0.9986113
+'''
+
+'''
+feature importance
+XX = pd.DataFrame(X)
+feature_list = list(XX.columns)
+feature_imp = pd.Series(lgb_model.feature_importances_, index=feature_list).sort_values(ascending=False)
+print(feature_imp[0:50])
+#gabor 90, 51, 21, 2
+#2:  theta=0, sigma=10, lambda=0.1, gamma =0.05, ksize=10
+#21: theta= 0.0 : sigma= 10 : lamda= 1.6707963267948966 : gamma= 0.5 : ksize= 10
+#51: theta= 0.0 : sigma= 30 : lamda= 1.6707963267948966 : gamma= 0.05 : ksize= 50
+#90: theta= 0.7853981633974483 : sigma= 10 : lamda= 2.456194490192345 : gamma= 0.05 : ksize= 25
+'''
 
 ###################################################################
 #################      Predict on New Images      #################
@@ -283,7 +493,6 @@ pred_output = "output_images_gabor/"
 #load, process and predict on new images
 new_images = get_files(my_dir, new_img_path, 1)
 
-
 #crop images to match model dimension images
 #crop image dimensions
 left = 0
@@ -292,7 +501,7 @@ right = 2262
 bottom = 530
 
 #get all files names in folder to iterate through
-new_in_folder = os.listdir(new_images)
+new_in_folder = os.listdir(my_dir+new_img_path)
 
 ###### crop new images to match model ######
 new_cropped = []
@@ -313,18 +522,28 @@ for img in new_cropped:
     #get name
     img_name = new_in_folder[i]
     #get vgg16 features
-    img = new_cropped[0]
+    img = new_cropped[i]
     img_in = np.expand_dims(img, axis=0)
     X1_new = get_features(img_in)
     X1_new = pd.DataFrame(X1_new)
 
     #get gabor features
-    X2_new = get_gabor(img_in, 5)
+    X2_new, kerns_new = get_tuned_gabors(img_in)
     X2_new = pd.DataFrame(X2_new)
     
+    #get filter features
+    X_fil, filters = get_filters(train_images)
+    
     #add VGG features and gabor features together
-    df2 = pd.concat([X1_new, X2_new], axis=1)
-
+    df2 = pd.concat([X1_new, X2_new, X_fil], axis=1)
+    
+    #drop na values or ones that sum to 0
+    #df2.drop([col for col, val in df2.sum().iteritems() if val ==0], axis=1, inplace=True)
+    
+    #apply pca
+    #X_pca = pca.transform(df2)
+    #df_pca = pd.DataFrame(X_pca)
+    
     #predict on image
     new_pred = lgb_model.predict(df2)
     
@@ -335,3 +554,40 @@ for img in new_cropped:
     plt.imsave(my_dir+pred_output+img_name, new_pred_img, cmap='gray')
     i += 1
 
+# review filters for tuning
+'''
+kerns= []
+n=1
+for k in (0, np.pi*.125, np.pi*.25, np.pi*.375, np.pi*.5, np.pi*.675, np.pi*.75, np.pi*.875):
+    ksize=25 #pixel size
+    sigma=5 #size of envelope
+    theta=k #orienation of gabor
+    lamda=5 #width of stripe
+    gamma=0.1 #height of the gabor
+    
+
+    kern = cv2.getGaborKernel((ksize, ksize), sigma, theta, lamda, gamma, 0, ktype=cv2.CV_32F)
+    print(n, ': theta=', theta, ': sigma=', sigma, ': lamda=', lamda, ': gamma=', gamma, ': ksize=', ksize)
+    n+=1
+    kerns.append(kern)
+
+ss=10
+fig = plt.figure(figsize=(ss, ss))
+columns = 3
+rows = 3
+
+z=0
+for i in range(1,rows*columns+1):
+    img = kerns[z]
+    fig.add_subplot(rows, columns, i)
+    plt.imshow(img)
+    plt.title(z+1)
+    z+=1
+    
+
+plt.show()    
+'''  
+    
+    
+    
+    
