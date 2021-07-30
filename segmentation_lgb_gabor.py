@@ -532,7 +532,7 @@ for img in new_cropped:
     X2_new = pd.DataFrame(X2_new)
     
     #get filter features
-    X_fil, filters = get_filters(train_images)
+    X_fil, filters = get_filters(img_in)
     
     #add VGG features and gabor features together
     df2 = pd.concat([X1_new, X2_new, X_fil], axis=1)
