@@ -30,8 +30,16 @@ from sklearn.model_selection import train_test_split
 #set path to images; I had 26 images so I split them 70/30 and put the 
 #image into the folder locations below. 18 training, 8 testing.
 
-my_dir = "/root/mlhome/segmentation/segmentation_cheng/"
-git_dir = "/root/mlhome/segmentation/segmentation_cheng/"
+# location of files on WATT
+# =============================================================================
+# my_dir = "/root/mlhome/segmentation/segmentation_cheng/"
+# git_dir = "/root/mlhome/segmentation/segmentation_cheng/"
+# img_path = "./train_images/"
+# mask_path = "./train_masks/"
+# =============================================================================
+
+my_dir = "/home/jeremy/Projects/segmentation_cheng/"
+git_dir = "/home/jeremy/Projects/segmentation_cheng/"
 img_path = "./train_images/"
 mask_path = "./train_masks/"
 
