@@ -119,7 +119,7 @@ def get_features(input_array):
 X1 = get_features(train_images)
 X1 = pd.DataFrame(X1)
 
-'''
+
 ### tone to get gabor features ###
 def get_gabor(input_array):
     i=0
